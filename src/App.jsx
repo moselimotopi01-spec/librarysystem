@@ -1,1048 +1,1613 @@
-/* KINGS LIRARY MANAGEMENT SYSTEM.*/
-import { useEffect, useRef, useState } from "react";
+import { useState, useEffect } from "react";
+import { apiFetch } from "./api";
 import "./App.css";
 
-/* ---------- DATA ---------- */
-
-const APP_KEY = "libraryAppData";
-
-function initialData() {
-    return {
-        books: [
-            { id: "b1", title: "The Great Gatsby", author: "F. Scott Fitzgerald", genre: "Classic", isbn: "9780743273565", qty: 5 },
-            { id: "b2", title: "1984", author: "George Orwell", genre: "Dystopian", isbn: "9780451524935", qty: 1 },
-            { id: "b3", title: "To Kill a Mockingbird", author: "Harper Lee", genre: "Fiction", isbn: "9780061120084", qty: 0 }
-        ],
-        users: [
-            { id: "u1", name: "admin", membershipId: "ADMIN-001", role: "admin", password: "admin123" }
-        ],
-        transactions: [],
-        currentUser: null
-    };
-}
-
-function loadData() {
-    try {
-        const saved = localStorage.getItem(APP_KEY);
-        if (saved) {
-            const parsed = JSON.parse(saved);
-            if (parsed && Array.isArray(parsed.books) && Array.isArray(parsed.users)) {
-                return {
-                    ...parsed,
-                    transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
-                    currentUser: parsed.currentUser || null
-                };
-            }
-        }
-    } catch (error) {
-        localStorage.removeItem(APP_KEY);
-    }
-    return initialData();
-}
-
-function uid(prefix) {
-    return prefix + Date.now() + Math.random().toString(16).slice(2);
-}
-
-/* Returns a new transactions array with the latest record first (max 100) */
-function withTransaction(transactions, type, bookTitle, quantity) {
-    const record = {
-        id: uid("t"),
-        time: new Date().toLocaleString(),
-        type,
-        bookTitle,
-        quantity
-    };
-    return [record, ...transactions].slice(0, 100);
-}
-
-function formatTransaction(type) {
-    const names = {
-        add: "Stock added",
-        borrow: "Borrowed",
-        update: "Book updated",
-        delete: "Book deleted",
-        "add-book": "Book added"
-    };
-    return names[type] || "Record";
-}
-
-function plural(count, one, many) {
-    return `${count} ${count === 1 ? one : many}`;
-}
-
-/* Custom hook: whole app state, saved to localStorage on every change */
-function useLibraryData() {
-    const [data, setData] = useState(loadData);
-
-    useEffect(() => {
-        try {
-            localStorage.setItem(APP_KEY, JSON.stringify(data));
-        } catch (error) {
-            console.error("Could not save data", error);
-        }
-    }, [data]);
-
-    return [data, setData];
-}
-
-/* ---------- SHARED UI COMPONENTS ---------- */
-
-function Footer() {
-    return (
-        <footer className="site-footer">
-            <p>© 2026 Community Library Management System. All rights reserved.</p>
-        </footer>
-    );
-}
-
-function PageHeading({ eyebrow, title, description }) {
-    return (
-        <section className="page-heading">
-            <div>
-                <p className="eyebrow">{eyebrow}</p>
-                <h1>{title}</h1>
-                <p>{description}</p>
-            </div>
-        </section>
-    );
-}
-
-function Panel({ title, eyebrow, countText, children }) {
-    return (
-        <section className="panel">
-            <div className="panel-heading">
-                <div>
-                    <p className="eyebrow">{eyebrow}</p>
-                    <h2>{title}</h2>
-                </div>
-                {countText && <span className="count-pill">{countText}</span>}
-            </div>
-            {children}
-        </section>
-    );
-}
-
-function EmptyState({ icon, title, description }) {
-    return (
-        <div className="empty-state">
-            <span className="empty-icon">{icon}</span>
-            <h3>{title}</h3>
-            <p>{description}</p>
-        </div>
-    );
-}
-
-function Field({ id, label, children }) {
-    return (
-        <div className="field">
-            <label htmlFor={id}>{label}</label>
-            {children}
-        </div>
-    );
-}
-
-function Button({ className = "", type = "button", children, ...props }) {
-    return (
-        <button type={type} className={`button ${className}`} {...props}>
-            {children}
-        </button>
-    );
-}
-
-function FormMessage({ message, className = "" }) {
-    return (
-        <p
-            className={`form-message ${className} ${message.type}`.trim()}
-            aria-live="polite"
-        >
-            {message.text}
-        </p>
-    );
-}
-
-const NO_MESSAGE = { text: "", type: "" };
-
-function StatusBadge({ qty }) {
-    if (qty === 0) return <span className="status out">Out of stock</span>;
-    if (qty < 2) return <span className="status low">Low stock</span>;
-    return <span className="status available">Available</span>;
-}
-
-/* ---------- LOGIN ---------- */
-
-function LoginPage({ onLogin }) {
-    const [username, setUsername] = useState("");
-    const [password, setPassword] = useState("");
-    const [message, setMessage] = useState(NO_MESSAGE);
-    const passwordRef = useRef(null);
-
-    function handleSubmit(event) {
-        event.preventDefault();
-
-        if (!username.trim() || !password) {
-            setMessage({ text: "Please enter both your username and password.", type: "error" });
-            return;
-        }
-
-        const error = onLogin(username.trim(), password);
-        if (error) {
-            setMessage({ text: error, type: "error" });
-            setPassword("");
-            passwordRef.current?.focus();
-        }
-    }
-
-    return (
-        <div className="login-page">
-            <main className="login-card">
-                <div className="login-header">
-                    <div className="brand-mark" aria-label="Library">📚</div>
-                    <p className="eyebrow">COMMUNITY LIBRARY</p>
-                    <h1>Library Management System</h1>
-                    <p>Sign in to manage books, stock and library accounts.</p>
-                </div>
-
-                <form className="form-stack" onSubmit={handleSubmit} noValidate>
-                    <Field id="loginUsername" label="Username">
-                        <input
-                            id="loginUsername"
-                            type="text"
-                            name="username"
-                            placeholder="Enter your username"
-                            autoComplete="username"
-                            value={username}
-                            onChange={event => setUsername(event.target.value)}
-                            required
-                        />
-                    </Field>
-
-                    <Field id="loginPassword" label="Password">
-                        <input
-                            id="loginPassword"
-                            ref={passwordRef}
-                            type="password"
-                            name="password"
-                            placeholder="Enter your password"
-                            autoComplete="current-password"
-                            value={password}
-                            onChange={event => setPassword(event.target.value)}
-                            required
-                        />
-                    </Field>
-
-                    <Button type="submit" className="button-primary button-large full-width">
-                        Sign in
-                    </Button>
-                    <FormMessage message={message} />
-                </form>
-
-                <div className="login-note">
-                    <strong>First time here?</strong>
-                    <p>Sign in with an administrator account. Administrators can create and manage other library accounts.</p>
-                </div>
-
-                <Footer />
-            </main>
-        </div>
-    );
-}
-
-/* ---------- HEADER ---------- */
-
-const PAGES = [
-    ["dashboard", "Dashboard"],
-    ["books", "Books"],
-    ["transactions", "Transactions"],
-    ["users", "Users"]
-];
-
-function canView(page, role) {
-    if (page === "users") return role === "admin";
-    if (page === "transactions") return role !== "member";
-    return true;
-}
-
-function Header({ activePage, user, onNavigate, onLogout }) {
-    return (
-        <header className="site-header">
-            <a
-                className="brand"
-                href="#dashboard"
-                aria-label="Community Library dashboard"
-                onClick={event => {
-                    event.preventDefault();
-                    onNavigate("dashboard");
-                }}
-            >
-                <span className="brand-icon">📚</span>
-                <span>
-                    <strong>Community Library</strong>
-                    <small>Management System</small>
-                </span>
-            </a>
-
-            <nav className="main-nav" aria-label="Main navigation">
-                {PAGES.filter(([page]) => canView(page, user.role)).map(([page, label]) => (
-                    <button
-                        key={page}
-                        type="button"
-                        className={"nav-button" + (activePage === page ? " active" : "")}
-                        onClick={() => onNavigate(page)}
-                    >
-                        {label}
-                    </button>
-                ))}
-            </nav>
-
-            <div className="header-account">
-                <span className="user-chip">{`${user.name} (${user.role})`}</span>
-                <Button className="button-ghost" onClick={onLogout}>Logout</Button>
-            </div>
-        </header>
-    );
-}
-
-/* ---------- DASHBOARD ---------- */
-
-function Dashboard({ books }) {
-    const totalCopies = books.reduce((sum, book) => sum + Number(book.qty || 0), 0);
-    const lowStock = books.filter(book => book.qty < 2).length;
-    const outOfStock = books.filter(book => book.qty === 0).length;
-
-    const stats = [
-        ["Total titles", books.length],
-        ["Total copies", totalCopies],
-        ["Low stock", lowStock],
-        ["Out of stock", outOfStock]
-    ];
-
-    return (
-        <div>
-            <PageHeading
-                eyebrow="OVERVIEW"
-                title="Library dashboard"
-                description="Monitor your collection and current book availability."
-            />
-
-            <section className="stats-grid">
-                {stats.map(([label, value]) => (
-                    <article className="stat-card" key={label}>
-                        <span className="stat-label">{label}</span>
-                        <strong className="stat-value">{value}</strong>
-                    </article>
-                ))}
-            </section>
-
-            <Panel
-                title="Current book availability"
-                eyebrow="COLLECTION"
-                countText={plural(books.length, "title", "titles")}
-            >
-                {books.length ? (
-                    <div className="table-wrapper">
-                        <table>
-                            <thead>
-                                <tr>
-                                    {["Title", "Author", "Genre", "ISBN", "Quantity", "Status"].map(h => (
-                                        <th key={h}>{h}</th>
-                                    ))}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {books.map(book => (
-                                    <tr key={book.id} className={book.qty < 2 ? "low-stock" : ""}>
-                                        <td>{book.title}</td>
-                                        <td>{book.author}</td>
-                                        <td>{book.genre}</td>
-                                        <td>{book.isbn}</td>
-                                        <td>{book.qty}</td>
-                                        <td><StatusBadge qty={book.qty} /></td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                ) : (
-                    <EmptyState icon="📘" title="No books yet" description="Add books from the Books page." />
-                )}
-            </Panel>
-        </div>
-    );
-}
-
-/* ---------- BOOKS ---------- */
-
-const EMPTY_BOOK = { title: "", author: "", genre: "", isbn: "", qty: "" };
-
-function BookForm({ books, editingBook, onSave, onClear }) {
-    const [form, setForm] = useState(
-        editingBook
-            ? {
-                title: editingBook.title,
-                author: editingBook.author,
-                genre: editingBook.genre,
-                isbn: editingBook.isbn,
-                qty: String(editingBook.qty)
-            }
-            : EMPTY_BOOK
-    );
-    const [message, setMessage] = useState(NO_MESSAGE);
-    const editingId = editingBook ? editingBook.id : null;
-
-    function update(field) {
-        return event => setForm({ ...form, [field]: event.target.value });
-    }
-
-    function handleSubmit(event) {
-        event.preventDefault();
-
-        const cleanISBN = form.isbn.trim();
-        const quantity = Number(form.qty);
-
-        if (!form.title.trim() || !form.author.trim() || !form.genre.trim() ||
-            !cleanISBN || form.qty === "" || !Number.isInteger(quantity) || quantity < 0) {
-            setMessage({ text: "Complete all fields correctly.", type: "error" });
-            return;
-        }
-
-        if (!/^[0-9]+$/.test(cleanISBN)) {
-            setMessage({ text: "ISBN must contain numbers only. Do not use spaces or hyphens.", type: "error" });
-            return;
-        }
-
-        const duplicate = books.some(book => book.isbn === cleanISBN && book.id !== editingId);
-        if (duplicate) {
-            setMessage({ text: "That ISBN already exists in the catalogue.", type: "error" });
-            return;
-        }
-
-        onSave(
-            {
-                title: form.title.trim(),
-                author: form.author.trim(),
-                genre: form.genre.trim(),
-                isbn: cleanISBN,
-                qty: quantity
-            },
-            editingId
-        );
-        setForm(EMPTY_BOOK);
-        setMessage(NO_MESSAGE);
-    }
-
-    function handleClear() {
-        setForm(EMPTY_BOOK);
-        setMessage(NO_MESSAGE);
-        onClear();
-    }
-
-    return (
-        <Panel title={editingId ? "Update book" : "Add a book"} eyebrow="BOOK RECORD">
-            <form className="form-grid" onSubmit={handleSubmit} noValidate>
-                <Field id="bookTitle" label="Book title">
-                    <input id="bookTitle" type="text" placeholder="e.g. Clean Code"
-                        value={form.title} onChange={update("title")} required />
-                </Field>
-                <Field id="bookAuthor" label="Author">
-                    <input id="bookAuthor" type="text" placeholder="e.g. Robert C. Martin"
-                        value={form.author} onChange={update("author")} required />
-                </Field>
-                <Field id="bookGenre" label="Genre">
-                    <input id="bookGenre" type="text" placeholder="e.g. Programming"
-                        value={form.genre} onChange={update("genre")} required />
-                </Field>
-                <Field id="bookISBN" label="ISBN (numbers only)">
-                    <input id="bookISBN" type="text" placeholder="Enter ISBN digits"
-                        inputMode="numeric" title="ISBN must contain numbers only"
-                        value={form.isbn} onChange={update("isbn")} required />
-                </Field>
-                <Field id="bookQuantity" label="Initial quantity">
-                    <input id="bookQuantity" type="number" placeholder="0" min={0} step={1}
-                        value={form.qty} onChange={update("qty")} required />
-                </Field>
-
-                <div className="form-action span-2">
-                    <Button type="submit" className="button-primary button-large">
-                        {editingId ? "Update book" : "Add book"}
-                    </Button>
-                    <Button className="button-secondary" onClick={handleClear}>Clear</Button>
-                </div>
-                <FormMessage message={message} className="span-2" />
-            </form>
-        </Panel>
-    );
-}
-
-function BooksPage({ books, role, onSave, onDelete }) {
-    const [editingId, setEditingId] = useState(null);
-    const isMember = role === "member";
-    const editingBook = books.find(book => book.id === editingId) || null;
-
-    function startEdit(id) {
-        setEditingId(id);
-        window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-
-    function handleSave(book, id) {
-        onSave(book, id);
-        setEditingId(null);
-    }
-
-    return (
-        <div>
-            <PageHeading
-                eyebrow="CATALOGUE"
-                title="Book management"
-                description="Add, update and remove books while keeping every ISBN unique."
-            />
-
-            {isMember ? (
-                <p className="access-notice">
-                    Read-only access: Members can view the catalogue but cannot change library records.
-                </p>
-            ) : (
-                /* key re-creates the form (and its fields) whenever a different book is edited */
-                <BookForm
-                    key={editingId || "new"}
-                    books={books}
-                    editingBook={editingBook}
-                    onSave={handleSave}
-                    onClear={() => setEditingId(null)}
-                />
-            )}
-
-            <Panel
-                title="Book list"
-                eyebrow="LIBRARY COLLECTION"
-                countText={plural(books.length, "title", "titles")}
-            >
-                {books.length ? (
-                    <div className="table-wrapper">
-                        <table>
-                            <thead>
-                                <tr>
-                                    {["Title", "Author", "Genre", "ISBN", "Quantity", "Status", "Actions"].map(h => (
-                                        <th key={h}>{h}</th>
-                                    ))}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {books.map(book => (
-                                    <tr key={book.id} className={book.qty < 2 ? "low-stock" : ""}>
-                                        <td>{book.title}</td>
-                                        <td>{book.author}</td>
-                                        <td>{book.genre}</td>
-                                        <td>{book.isbn}</td>
-                                        <td>{book.qty}</td>
-                                        <td><StatusBadge qty={book.qty} /></td>
-                                        <td>
-                                            <div className="action-group">
-                                                {isMember ? (
-                                                    <span className="muted">View only</span>
-                                                ) : (
-                                                    <>
-                                                        <Button className="button-secondary button-small"
-                                                            onClick={() => startEdit(book.id)}>Edit</Button>
-                                                        <Button className="button-danger button-small"
-                                                            onClick={() => onDelete(book.id)}>Delete</Button>
-                                                    </>
-                                                )}
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                ) : (
-                    <EmptyState icon="📘" title="Your catalogue is empty"
-                        description="Add a book above to start building the collection." />
-                )}
-            </Panel>
-        </div>
-    );
-}
-
-/* ---------- TRANSACTIONS ---------- */
-
-function TransactionsPage({ books, transactions, onProcess }) {
-    const [bookId, setBookId] = useState("");
-    const [type, setType] = useState("");
-    const [quantity, setQuantity] = useState("");
-    const [message, setMessage] = useState(NO_MESSAGE);
-
-    function handleSubmit(event) {
-        event.preventDefault();
-
-        const book = books.find(item => item.id === bookId);
-        const amount = Number(quantity);
-
-        if (!book || !type || quantity === "" || !Number.isInteger(amount) || amount < 1) {
-            setMessage({ text: "Select a book, transaction type and a valid quantity.", type: "error" });
-            return;
-        }
-
-        if (type === "borrow" && book.qty < amount) {
-            setMessage({ text: `Not enough stock. Available copies: ${book.qty}.`, type: "error" });
-            return;
-        }
-
-        onProcess(book.id, type, amount);
-        setBookId("");
-        setType("");
-        setQuantity("");
-        setMessage(NO_MESSAGE);
-    }
-
-    return (
-        <div>
-            <PageHeading
-                eyebrow="INVENTORY"
-                title="Stock transactions"
-                description="Add newly arrived copies or record borrowed copies."
-            />
-
-            <Panel title="Record a transaction" eyebrow="STOCK CONTROL">
-                <form className="form-grid" onSubmit={handleSubmit} noValidate>
-                    <Field id="transactionBook" label="Book">
-                        <select id="transactionBook" value={bookId} onChange={e => setBookId(e.target.value)}>
-                            <option value="" disabled>Select a book</option>
-                            {books.map(book => (
-                                <option key={book.id} value={book.id}>
-                                    {`${book.title} — ${book.qty} in stock`}
-                                </option>
-                            ))}
-                        </select>
-                    </Field>
-
-                    <Field id="transactionType" label="Transaction type">
-                        <select id="transactionType" value={type} onChange={e => setType(e.target.value)}>
-                            <option value="" disabled>Select type</option>
-                            <option value="add">Add stock</option>
-                            <option value="borrow">Borrow book</option>
-                        </select>
-                    </Field>
-
-                    <Field id="transactionQuantity" label="Quantity">
-                        <input id="transactionQuantity" type="number" placeholder="Enter quantity"
-                            min={1} step={1} value={quantity}
-                            onChange={e => setQuantity(e.target.value)} required />
-                    </Field>
-
-                    <div className="form-action span-2">
-                        <Button type="submit" className="button-primary button-large">
-                            Process transaction
-                        </Button>
-                    </div>
-                    <FormMessage message={message} className="span-2" />
-                </form>
-            </Panel>
-
-            <Panel
-                title="Transaction history"
-                eyebrow="AUDIT TRAIL"
-                countText={plural(transactions.length, "record", "records")}
-            >
-                {transactions.length ? (
-                    <div className="table-wrapper">
-                        <table>
-                            <thead>
-                                <tr>
-                                    {["Date", "Book", "Type", "Quantity"].map(h => <th key={h}>{h}</th>)}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {transactions.map(item => (
-                                    <tr key={item.id}>
-                                        <td>{item.time}</td>
-                                        <td>{item.bookTitle || "—"}</td>
-                                        <td>{formatTransaction(item.type)}</td>
-                                        <td>{item.quantity || 0}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                ) : (
-                    <EmptyState icon="🧾" title="No transactions yet"
-                        description="Processed stock changes will appear here." />
-                )}
-            </Panel>
-        </div>
-    );
-}
-
-/* ---------- USERS ---------- */
-
-const EMPTY_USER = { name: "", membershipId: "", role: "", password: "" };
-
-function UserForm({ users, editingUser, onSave, onClear }) {
-    const [form, setForm] = useState(
-        editingUser
-            ? {
-                name: editingUser.name,
-                membershipId: editingUser.membershipId,
-                role: editingUser.role,
-                password: ""
-            }
-            : EMPTY_USER
-    );
-    const [message, setMessage] = useState(NO_MESSAGE);
-    const editingId = editingUser ? editingUser.id : null;
-
-    function update(field) {
-        return event => setForm({ ...form, [field]: event.target.value });
-    }
-
-    function handleSubmit(event) {
-        event.preventDefault();
-
-        const cleanName = form.name.trim();
-        const cleanMembership = form.membershipId.trim();
-        const cleanPassword = form.password;
-
-        if (!cleanName || !cleanMembership || !form.role || (!editingId && !cleanPassword)) {
-            setMessage({ text: "Complete all required fields.", type: "error" });
-            return;
-        }
-
-        if (cleanPassword && cleanPassword.length < 4) {
-            setMessage({ text: "Password must contain at least 4 characters.", type: "error" });
-            return;
-        }
-
-        const duplicate = users.some(user =>
-            user.membershipId.toLowerCase() === cleanMembership.toLowerCase() &&
-            user.id !== editingId
-        );
-        if (duplicate) {
-            setMessage({ text: "That Membership ID is already in use.", type: "error" });
-            return;
-        }
-
-        onSave(
-            { name: cleanName, membershipId: cleanMembership, role: form.role, password: cleanPassword },
-            editingId
-        );
-        setForm(EMPTY_USER);
-        setMessage(NO_MESSAGE);
-    }
-
-    function handleClear() {
-        setForm(EMPTY_USER);
-        setMessage(NO_MESSAGE);
-        onClear();
-    }
-
-    return (
-        <Panel title={editingId ? "Update user" : "Add a user"} eyebrow="ACCOUNT SETUP">
-            <form className="form-grid" onSubmit={handleSubmit} noValidate>
-                <Field id="userName" label="Full name">
-                    <input id="userName" type="text" placeholder="Enter full name"
-                        value={form.name} onChange={update("name")} required />
-                </Field>
-                <Field id="membershipId" label="Membership ID">
-                    <input id="membershipId" type="text" placeholder="e.g. MEM-001"
-                        value={form.membershipId} onChange={update("membershipId")} required />
-                </Field>
-                <Field id="userRole" label="Role">
-                    <select id="userRole" value={form.role} onChange={update("role")}>
-                        <option value="" disabled>Select role</option>
-                        <option value="librarian">Librarian</option>
-                        <option value="member">Member</option>
-                        <option value="admin">Admin</option>
-                    </select>
-                </Field>
-                <Field id="userPassword" label="Password">
-                    <input id="userPassword" type="password" autoComplete="new-password"
-                        placeholder={editingId ? "Leave blank to keep current password" : "Create a password"}
-                        value={form.password} onChange={update("password")} required={!editingId} />
-                </Field>
-
-                <div className="form-action span-2">
-                    <Button type="submit" className="button-primary button-large">
-                        {editingId ? "Update user" : "Create user"}
-                    </Button>
-                    <Button className="button-secondary" onClick={handleClear}>Clear</Button>
-                </div>
-                <FormMessage message={message} className="span-2" />
-            </form>
-        </Panel>
-    );
-}
-
-function UsersPage({ users, onSave, onDelete }) {
-    const [editingId, setEditingId] = useState(null);
-    const editingUser = users.find(user => user.id === editingId) || null;
-
-    function startEdit(id) {
-        setEditingId(id);
-        window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-
-    function handleSave(user, id) {
-        onSave(user, id);
-        setEditingId(null);
-    }
-
-    return (
-        <div>
-            <PageHeading
-                eyebrow="ADMINISTRATION"
-                title="User management"
-                description="Create, update and remove library accounts."
-            />
-
-            <UserForm
-                key={editingId || "new"}
-                users={users}
-                editingUser={editingUser}
-                onSave={handleSave}
-                onClear={() => setEditingId(null)}
-            />
-
-            <Panel
-                title="Registered users"
-                eyebrow="ACCOUNTS"
-                countText={plural(users.length, "user", "users")}
-            >
-                {users.length ? (
-                    <div className="table-wrapper">
-                        <table>
-                            <thead>
-                                <tr>
-                                    {["Name", "Membership ID", "Role", "Actions"].map(h => <th key={h}>{h}</th>)}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {users.map(user => (
-                                    <tr key={user.id}>
-                                        <td>{user.name}</td>
-                                        <td>{user.membershipId}</td>
-                                        <td><span className="role-badge">{user.role}</span></td>
-                                        <td>
-                                            <div className="action-group">
-                                                <Button className="button-secondary button-small"
-                                                    onClick={() => startEdit(user.id)}>Edit</Button>
-                                                <Button className="button-danger button-small"
-                                                    onClick={() => onDelete(user.id)}>Delete</Button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                ) : (
-                    <EmptyState icon="👤" title="No users found" description="Create the first user above." />
-                )}
-            </Panel>
-        </div>
-    );
-}
-
-/* ---------- APP ---------- */
-
 function App() {
-    const [data, setData] = useLibraryData();
-    const [page, setPage] = useState("dashboard");
-    const { books, users, transactions, currentUser } = data;
+    // LOGIN STATE: only the login session is stored locally.
+    const [currentUser, setCurrentUser] = useState(() => {
+        const savedUser = localStorage.getItem("currentUser");
+        const savedToken = localStorage.getItem("libraryToken");
+        return savedUser && savedToken ? JSON.parse(savedUser) : null;
+    });
+    const [loginId, setLoginId] = useState("");
+    const [loginPassword, setLoginPassword] = useState("");
+    const [loginError, setLoginError] = useState("");
+    const [activePage, setActivePage] = useState("Dashboard");
 
-    /* ----- auth ----- */
+    // DATA IS LOADED FROM THE EXPRESS API / MYSQL
+    const [users, setUsers] = useState([]);
+    const [books, setBooks] = useState([]);
+    const [transactions, setTransactions] = useState([]);
+    const [dataLoading, setDataLoading] = useState(false);
 
-    /* Returns an error message, or "" when the login succeeds */
-    function login(name, pass) {
-        let nextUsers = users;
-        let user = users.find(account =>
-            account.name.toLowerCase() === name.toLowerCase() &&
-            account.password === pass
-        );
+    // USER FORM
+    const [userName, setUserName] = useState("");
+    const [membershipId, setMembershipId] = useState("");
+    const [userRole, setUserRole] = useState("Membership");
+    const [userPassword, setUserPassword] = useState("");
+    const [editingUserId, setEditingUserId] = useState(null);
 
-        /* Keeps the original test administrator available even if older
-           incompatible data was left in localStorage. */
-        if (!user && name.toLowerCase() === "admin" && pass === "admin123") {
-            const existing = users.find(account => account.id === "u1" && account.role === "admin");
-            if (existing) {
-                user = { ...existing, name: "admin", password: "admin123" };
-                nextUsers = users.map(account => (account.id === "u1" ? user : account));
-            } else {
-                user = { id: "u1", name: "admin", membershipId: "ADMIN-001", role: "admin", password: "admin123" };
-                nextUsers = [user, ...users];
+    // BOOK FORM
+    const [title, setTitle] = useState("");
+    const [author, setAuthor] = useState("");
+    const [genre, setGenre] = useState("");
+    const [isbn, setIsbn] = useState("");
+    const [quantity, setQuantity] = useState("");
+    const [editingBookId, setEditingBookId] = useState(null);
+
+    // TRANSACTION FORM
+    const [selectedBookId, setSelectedBookId] = useState("");
+    const [transactionType, setTransactionType] = useState("add");
+    const [transactionQuantity, setTransactionQuantity] = useState("");
+
+    // Load records after login. No book/user/transaction records are saved in localStorage.
+    useEffect(() => {
+        if (!currentUser) {
+            setBooks([]);
+            setUsers([]);
+            setTransactions([]);
+            return;
+        }
+        let cancelled = false;
+        async function loadData() {
+            setDataLoading(true);
+            try {
+                const [loadedBooks, loadedTransactions] = await Promise.all([
+                    apiFetch("/books"),
+                    apiFetch("/transactions")
+                ]);
+                if (cancelled) return;
+                setBooks(loadedBooks);
+                setTransactions(loadedTransactions.map(t => ({
+                    ...t,
+                    date: t.date ? new Date(t.date).toLocaleString() : ""
+                })));
+                if (currentUser.role === "Admin") {
+                    setUsers(await apiFetch("/users"));
+                } else {
+                    setUsers([]);
+                }
+            } catch (error) {
+                if (!cancelled) alert(error.message || "Could not load library data.");
+            } finally {
+                if (!cancelled) setDataLoading(false);
             }
         }
+        loadData();
+        return () => { cancelled = true; };
+    }, [currentUser]);
 
-        if (!user) return "Invalid username or password.";
+    // LOGIN
+    async function handleLogin(event) {
+        event.preventDefault();
+        setLoginError("");
+        try {
+            const result = await apiFetch("/auth/login", {
+                method: "POST",
+                auth: false,
+                body: { membershipId: loginId, password: loginPassword }
+            });
+            localStorage.setItem("libraryToken", result.token);
+            localStorage.setItem("currentUser", JSON.stringify(result.user));
+            setCurrentUser(result.user);
+            setLoginId("");
+            setLoginPassword("");
+            setActivePage("Dashboard");
+        } catch (error) {
+            setLoginError(error.message || "Invalid membership ID or password.");
+        }
+    }
 
-        setPage("dashboard");
-        setData({
-            ...data,
-            users: nextUsers,
-            currentUser: {
-                id: user.id,
-                name: user.name,
-                membershipId: user.membershipId,
-                role: user.role
+    // LOGOUT
+    function handleLogout() {
+        localStorage.removeItem("libraryToken");
+        localStorage.removeItem("currentUser");
+        setCurrentUser(null);
+        setActivePage("Dashboard");
+    }
+
+    // USER MANAGEMENT
+    async function handleUserSubmit(event) {
+        event.preventDefault();
+        if (!userName.trim() || !membershipId.trim() || (editingUserId === null && !userPassword)) {
+            alert("Please fill in all required user fields.");
+            return;
+        }
+        try {
+            const payload = { name: userName, membershipId, role: userRole };
+            if (userPassword) payload.password = userPassword;
+            if (editingUserId !== null) {
+                await apiFetch(`/users/${editingUserId}`, { method: "PUT", body: payload });
+                alert("User updated successfully!");
+            } else {
+                await apiFetch("/users", { method: "POST", body: payload });
+                alert("User added successfully!");
             }
-        });
-        return "";
+            setUsers(await apiFetch("/users"));
+            clearUserForm();
+        } catch (error) { alert(error.message || "Could not save user."); }
     }
 
-    function logout() {
-        setData({ ...data, currentUser: null });
-        setPage("dashboard");
+    function editUser(user) {
+        setUserName(user.name);
+        setMembershipId(user.membershipId);
+        setUserRole(user.role);
+        setUserPassword("");
+        setEditingUserId(user.id);
+        window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
-    function navigate(target) {
-        setPage(canView(target, currentUser.role) ? target : "dashboard");
-    }
-
-    /* ----- books ----- */
-
-    function saveBook(book, id) {
-        setData(prev => {
-            if (id) {
-                return {
-                    ...prev,
-                    books: prev.books.map(item => (item.id === id ? { ...item, ...book } : item)),
-                    transactions: withTransaction(prev.transactions, "update", book.title, 0)
-                };
-            }
-            return {
-                ...prev,
-                books: [...prev.books, { id: uid("b"), ...book }],
-                transactions: withTransaction(prev.transactions, "add-book", book.title, book.qty)
-            };
-        });
-    }
-
-    function deleteBook(id) {
-        const book = books.find(item => item.id === id);
-        if (!book) return;
-        if (!window.confirm(`Delete "${book.title}" from the catalogue?`)) return;
-
-        setData(prev => ({
-            ...prev,
-            books: prev.books.filter(item => item.id !== id),
-            transactions: withTransaction(prev.transactions, "delete", book.title, 0)
-        }));
-    }
-
-    /* ----- stock transactions ----- */
-
-    function processTransaction(bookId, type, amount) {
-        setData(prev => {
-            const book = prev.books.find(item => item.id === bookId);
-            if (!book) return prev;
-            return {
-                ...prev,
-                books: prev.books.map(item =>
-                    item.id === bookId
-                        ? { ...item, qty: type === "add" ? item.qty + amount : item.qty - amount }
-                        : item
-                ),
-                transactions: withTransaction(prev.transactions, type, book.title, amount)
-            };
-        });
-    }
-
-    /* ----- users ----- */
-
-    function saveUser(form, id) {
-        setData(prev => {
-            if (id) {
-                const users = prev.users.map(user =>
-                    user.id === id
-                        ? {
-                            ...user,
-                            name: form.name,
-                            membershipId: form.membershipId,
-                            role: form.role,
-                            password: form.password || user.password
-                        }
-                        : user
-                );
-                const updated = users.find(user => user.id === id);
-                const editingSelf = prev.currentUser && prev.currentUser.id === id && updated;
-                return {
-                    ...prev,
-                    users,
-                    currentUser: editingSelf
-                        ? {
-                            id: updated.id,
-                            name: updated.name,
-                            membershipId: updated.membershipId,
-                            role: updated.role
-                        }
-                        : prev.currentUser
-                };
-            }
-            return { ...prev, users: [...prev.users, { id: uid("u"), ...form }] };
-        });
-    }
-
-    function deleteUser(id) {
+    async function deleteUser(id) {
         const user = users.find(item => item.id === id);
         if (!user) return;
-
-        if (user.id === currentUser.id) {
-            alert("You cannot delete the account you are currently using.");
+        if (Number(user.id) === Number(currentUser.id)) {
+            alert("You cannot delete the account currently logged in.");
             return;
         }
-
-        const adminCount = users.filter(item => item.role === "admin").length;
-        if (user.role === "admin" && adminCount === 1) {
-            alert("At least one administrator account must remain.");
-            return;
-        }
-
-        if (!window.confirm(`Delete ${user.name}'s account?`)) return;
-
-        setData(prev => ({ ...prev, users: prev.users.filter(item => item.id !== id) }));
+        if (!window.confirm(`Delete ${user.name}?`)) return;
+        try {
+            await apiFetch(`/users/${id}`, { method: "DELETE" });
+            setUsers(await apiFetch("/users"));
+            if (editingUserId === id) clearUserForm();
+        } catch (error) { alert(error.message || "Could not delete user."); }
     }
 
-    /* ----- render ----- */
+    function clearUserForm() {
+        setUserName("");
+        setMembershipId("");
+        setUserRole("Membership");
+        setUserPassword("");
+        setEditingUserId(null);
+    }
+
+    // BOOK MANAGEMENT
+    async function handleBookSubmit(event) {
+        event.preventDefault();
+        if (!title.trim() || !author.trim() || !genre.trim() || !isbn.trim() || quantity === "") {
+            alert("Please fill in all fields.");
+            return;
+        }
+        const payload = { title, author, genre, isbn, quantity: Number(quantity) };
+        try {
+            if (editingBookId !== null) {
+                await apiFetch(`/books/${editingBookId}`, { method: "PUT", body: payload });
+                alert("Book updated successfully!");
+            } else {
+                await apiFetch("/books", { method: "POST", body: payload });
+                alert("Book added successfully!");
+            }
+            setBooks(await apiFetch("/books"));
+            clearBookForm();
+        } catch (error) { alert(error.message || "Could not save book."); }
+    }
+
+    function editBook(book) {
+        setTitle(book.title);
+        setAuthor(book.author);
+        setGenre(book.genre);
+        setIsbn(book.isbn);
+        setQuantity(book.quantity);
+        setEditingBookId(book.id);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    async function deleteBook(id) {
+        if (!window.confirm("Are you sure you want to delete this book?")) return;
+        try {
+            await apiFetch(`/books/${id}`, { method: "DELETE" });
+            setBooks(await apiFetch("/books"));
+            if (editingBookId === id) clearBookForm();
+        } catch (error) { alert(error.message || "Could not delete book."); }
+    }
+
+    function clearBookForm() {
+        setTitle("");
+        setAuthor("");
+        setGenre("");
+        setIsbn("");
+        setQuantity("");
+        setEditingBookId(null);
+    }
+
+    // STOCK TRANSACTIONS
+    async function recordTransaction(event) {
+        event.preventDefault();
+        if (selectedBookId === "" || transactionQuantity === "") {
+            alert("Please select a book and enter a quantity.");
+            return;
+        }
+        const amount = Number(transactionQuantity);
+        if (!Number.isInteger(amount) || amount <= 0) {
+            alert("Quantity must be a positive whole number.");
+            return;
+        }
+        try {
+            await apiFetch("/transactions", {
+                method: "POST",
+                body: { bookId: Number(selectedBookId), type: transactionType, quantity: amount }
+            });
+            const [updatedBooks, updatedTransactions] = await Promise.all([
+                apiFetch("/books"), apiFetch("/transactions")
+            ]);
+            setBooks(updatedBooks);
+            setTransactions(updatedTransactions.map(t => ({
+                ...t,
+                date: t.date ? new Date(t.date).toLocaleString() : ""
+            })));
+            alert(transactionType === "add" ? "Stock added successfully!" : "Book borrowed successfully!");
+            setSelectedBookId("");
+            setTransactionQuantity("");
+        } catch (error) { alert(error.message || "Transaction failed."); }
+    }
+
+    // DASHBOARD VALUES
+
+    const totalCopies = books.reduce(
+        (total, book) => total + book.quantity,
+        0
+    );
+
+    const lowStockBooks = books.filter(
+        book => book.quantity < 2
+    ).length;
+
+    const borrowedBooks = transactions
+        .filter(
+            transaction =>
+                transaction.type === "Borrowed"
+        )
+        .reduce(
+            (total, transaction) =>
+                total + transaction.quantity,
+            0
+        );
+
+    // ACCESS CONTROL
+
+    function canAccess(page) {
+        if (!currentUser) return false;
+
+        if (currentUser.role === "Admin") {
+            return true;
+        }
+
+        if (currentUser.role === "Librarian") {
+            return (
+                page === "Dashboard" ||
+                page === "Books" ||
+                page === "Transactions"
+            );
+        }
+
+        if (currentUser.role === "Membership") {
+            return (
+                page === "Dashboard" ||
+                page === "Books"
+            );
+        }
+
+        return false;
+    }
+
+    function goToPage(page) {
+        if (canAccess(page)) {
+            setActivePage(page);
+        }
+    }
+
+    // LOGIN PAGE
 
     if (!currentUser) {
-        return <LoginPage onLogin={login} />;
+        return (
+    <div className="login-page">
+
+        <div className="login-card">
+
+            <div className="login-logo">
+                📚
+            </div>
+
+            <h1>
+                Welcome to KINGS Library Management System
+            </h1>
+
+            <p className="login-subtitle">
+                Please sign in to continue
+            </p>
+
+            <form
+                className="login-form"
+                onSubmit={handleLogin}
+            >
+
+                <div className="form-group">
+                    <label>
+                        Membership ID
+                    </label>
+
+                    <input
+                        type="text"
+                        value={loginId}
+                        onChange={e =>
+                            setLoginId(e.target.value)
+                        }
+                        placeholder="Enter membership ID"
+                    />
+                </div>
+
+                <div className="form-group">
+                    <label>
+                        Password
+                    </label>
+
+                    <input
+                        type="password"
+                        value={loginPassword}
+                        onChange={e =>
+                            setLoginPassword(e.target.value)
+                        }
+                        placeholder="Enter password"
+                    />
+                </div>
+
+                {loginError && (
+                    <div className="login-error">
+                        {loginError}
+                    </div>
+                )}
+
+                <button
+                    type="submit"
+                    className="login-button"
+                >
+                    Sign In
+                </button>
+
+            </form>
+
+        </div>
+
+        <div className="login-copyright">
+            © 2026 KINGS Library Management System. All Rights Reserved.
+        </div>
+
+    </div>
+);
     }
 
-    /* If the role changed (e.g. admin edited their own role), fall back safely */
-    const activePage = canView(page, currentUser.role) ? page : "dashboard";
+    // MAIN APPLICATION
 
     return (
-        <>
-            <Header
-                activePage={activePage}
-                user={currentUser}
-                onNavigate={navigate}
-                onLogout={logout}
-            />
+        <div className="app">
 
-            <main className="page-shell">
-                {activePage === "dashboard" && <Dashboard books={books} />}
-                {activePage === "books" && (
-                    <BooksPage
-                        books={books}
-                        role={currentUser.role}
-                        onSave={saveBook}
-                        onDelete={deleteBook}
-                    />
+            {/* SIDEBAR */}
+
+            <aside className="sidebar">
+
+                <div className="logo">
+
+                    <div className="logo-icon">
+                        📚
+                    </div>
+
+                    <div>
+                        <h2>Library</h2>
+                        <span>
+                            Management System
+                        </span>
+                    </div>
+
+                </div>
+
+                <nav className="navigation">
+
+                    {canAccess("Dashboard") && (
+                        <button
+                            className={
+                                activePage === "Dashboard"
+                                    ? "nav-item active"
+                                    : "nav-item"
+                            }
+                            onClick={() =>
+                                goToPage("Dashboard")
+                            }
+                        >
+                            
+                            <span>Dashboard</span>
+                        </button>
+                    )}
+
+                    {canAccess("Books") && (
+                        <button
+                            className={
+                                activePage === "Books"
+                                    ? "nav-item active"
+                                    : "nav-item"
+                            }
+                            onClick={() =>
+                                goToPage("Books")
+                            }
+                        >
+                            
+                            <span>Books</span>
+                        </button>
+                    )}
+
+                    {canAccess("Users") && (
+                        <button
+                            className={
+                                activePage === "Users"
+                                    ? "nav-item active"
+                                    : "nav-item"
+                            }
+                            onClick={() =>
+                                goToPage("Users")
+                            }
+                        >
+                            
+                            <span>Users</span>
+                        </button>
+                    )}
+
+                    {canAccess("Transactions") && (
+                        <button
+                            className={
+                                activePage === "Transactions"
+                                    ? "nav-item active"
+                                    : "nav-item"
+                            }
+                            onClick={() =>
+                                goToPage("Transactions")
+                            }
+                        >
+                            
+                            <span>Transactions</span>
+                        </button>
+                    )}
+
+                </nav>
+
+                <div className="sidebar-bottom">
+
+                    <div className="logged-role">
+                        <small>Logged in as</small>
+                        <strong>
+                            {currentUser.role}
+                        </strong>
+                    </div>
+
+                    <button
+                        className="nav-item logout"
+                        onClick={handleLogout}
+                    >
+                        
+                        <span>Logout</span>
+                    </button>
+
+                </div>
+
+            </aside>
+
+            {/* MAIN */}
+
+            <main className="main-content">
+
+                {/* HEADER */}
+
+                <header className="top-header">
+
+                    <div>
+                        <h1>
+                            {activePage}
+                        </h1>
+
+                        <p>
+                            Welcome back,{" "}
+                            {currentUser.name}
+                        </p>
+                    </div>
+
+                    <div className="admin-profile">
+
+                        <div className="profile-avatar">
+                            {currentUser.name
+                                .charAt(0)
+                                .toUpperCase()}
+                        </div>
+
+                        <div>
+                            <strong>
+                                {currentUser.name}
+                            </strong>
+
+                            <small>
+                                {currentUser.role}
+                            </small>
+                        </div>
+
+                    </div>
+
+                </header>
+
+                {/* =========================
+                    DASHBOARD
+                ========================= */}
+
+                {activePage === "Dashboard" && (
+                    <section className="page">
+
+                        <div className="welcome-card">
+
+                            <div>
+
+                                <span className="eyebrow">
+                                    LIBRARY OVERVIEW
+                                </span>
+
+                                <h2>
+                                    Manage your library
+                                    with ease.
+                                </h2>
+
+                                <p>
+                                    Keep track of books,
+                                    users and borrowing
+                                    transactions from
+                                    one place.
+                                </p>
+
+                            </div>
+
+                            
+
+                        </div>
+
+                        <div className="stats-grid">
+
+                            <div className="stat-card">
+                               
+
+                                <div>
+                                    <span>Total Books</span>
+                                    <strong>
+                                        {books.length}
+                                    </strong>
+                                </div>
+                            </div>
+
+                            <div className="stat-card">
+                               
+
+                                <div>
+                                    <span>Total Copies</span>
+                                    <strong>
+                                        {totalCopies}
+                                    </strong>
+                                </div>
+                            </div>
+
+                            <div className="stat-card">
+                                
+
+                                <div>
+                                    <span>
+                                        Borrowed Books
+                                    </span>
+
+                                    <strong>
+                                        {borrowedBooks}
+                                    </strong>
+                                </div>
+                            </div>
+
+                            <div className="stat-card">
+                                
+
+                                <div>
+                                    <span>Low Stock</span>
+
+                                    <strong>
+                                        {lowStockBooks}
+                                    </strong>
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <div className="content-card">
+
+                            <div className="card-header">
+
+                                <div>
+                                    <h2>
+                                        Library Books
+                                    </h2>
+
+                                    <p>
+                                        Current books in
+                                        the library
+                                    </p>
+                                </div>
+
+                                <button
+                                    className="primary-button"
+                                    onClick={() =>
+                                        goToPage("Books")
+                                    }
+                                >
+                                    View Books →
+                                </button>
+
+                            </div>
+
+                            <div className="table-wrapper">
+
+                                <table>
+
+                                    <thead>
+                                        <tr>
+                                            <th>Book</th>
+                                            <th>Author</th>
+                                            <th>ISBN</th>
+                                            <th>Stock</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody>
+
+                                        {books.map(book => (
+                                            <tr key={book.id}>
+
+                                                <td>
+                                                    {book.title}
+                                                </td>
+
+                                                <td>
+                                                    {book.author}
+                                                </td>
+
+                                                <td>
+                                                    {book.isbn}
+                                                </td>
+
+                                                <td>
+                                                    {book.quantity}
+                                                </td>
+
+                                                <td>
+                                                    {book.quantity < 2 ? (
+                                                        <span className="status low">
+                                                            Low Stock
+                                                        </span>
+                                                    ) : (
+                                                        <span className="status available">
+                                                            Available
+                                                        </span>
+                                                    )}
+                                                </td>
+
+                                            </tr>
+                                        ))}
+
+                                    </tbody>
+
+                                </table>
+
+                            </div>
+
+                        </div>
+
+                    </section>
                 )}
-                {activePage === "transactions" && (
-                    <TransactionsPage
-                        books={books}
-                        transactions={transactions}
-                        onProcess={processTransaction}
-                    />
+
+                {/* =========================
+                    BOOKS
+                ========================= */}
+
+                {activePage === "Books" && (
+                    <section className="page">
+
+                        <div className="page-title">
+
+                            <div>
+                                <h2>
+                                    Book Management
+                                </h2>
+
+                                <p>
+                                    {currentUser.role ===
+                                    "Membership"
+                                        ? "View books currently available in the library."
+                                        : "Add, update and manage library books."}
+                                </p>
+                            </div>
+
+                        </div>
+
+                        {/* MEMBERSHIP NOTICE */}
+
+                        {currentUser.role ===
+                            "Membership" && (
+                            <div className="view-only-notice">
+                                
+
+                                <div>
+                                    <strong>
+                                        View Only
+                                    </strong>
+
+                                    <p>
+                                        Membership users
+                                        can only view
+                                        library books.
+                                        You cannot add,
+                                        update or delete
+                                        books.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ADD / UPDATE BOOK */}
+
+                        {currentUser.role !==
+                            "Membership" && (
+                            <div className="content-card add-book-card">
+
+                                <div className="card-header">
+
+                                    <div>
+
+                                        <h2>
+                                            {editingBookId !==
+                                            null
+                                                ? "Update Book"
+                                                : "Add New Book"}
+                                        </h2>
+
+                                        <p>
+                                            {editingBookId !==
+                                            null
+                                                ? "Edit the book details below."
+                                                : "Enter the details of the new book."}
+                                        </p>
+
+                                    </div>
+
+                                </div>
+
+                                <form
+                                    className="book-form"
+                                    onSubmit={
+                                        handleBookSubmit
+                                    }
+                                >
+
+                                    <div className="form-group">
+                                        <label>
+                                            Book Title
+                                        </label>
+
+                                        <input
+                                            type="text"
+                                            value={title}
+                                            onChange={e =>
+                                                setTitle(
+                                                    e.target
+                                                        .value
+                                                )
+                                            }
+                                            placeholder="Enter book title"
+                                        />
+                                    </div>
+
+                                    <div className="form-group">
+                                        <label>
+                                            Author
+                                        </label>
+
+                                        <input
+                                            type="text"
+                                            value={author}
+                                            onChange={e =>
+                                                setAuthor(
+                                                    e.target
+                                                        .value
+                                                )
+                                            }
+                                            placeholder="Enter author name"
+                                        />
+                                    </div>
+
+                                    <div className="form-group">
+                                        <label>
+                                            Genre
+                                        </label>
+
+                                        <input
+                                            type="text"
+                                            value={genre}
+                                            onChange={e =>
+                                                setGenre(
+                                                    e.target
+                                                        .value
+                                                )
+                                            }
+                                            placeholder="e.g. Fiction"
+                                        />
+                                    </div>
+
+                                    <div className="form-group">
+                                        <label>
+                                            ISBN
+                                        </label>
+
+                                        <input
+                                            type="text"
+                                            value={isbn}
+                                            onChange={e => {
+                                                const value =
+                                                    e.target
+                                                        .value;
+
+                                                if (
+                                                    /^\d*$/.test(
+                                                        value
+                                                    )
+                                                ) {
+                                                    setIsbn(
+                                                        value
+                                                    );
+                                                }
+                                            }}
+                                            placeholder="Numbers only"
+                                            inputMode="numeric"
+                                        />
+                                    </div>
+
+                                    <div className="form-group">
+                                        <label>
+                                            Quantity
+                                        </label>
+
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            value={quantity}
+                                            onChange={e =>
+                                                setQuantity(
+                                                    e.target
+                                                        .value
+                                                )
+                                            }
+                                            placeholder="Number of copies"
+                                        />
+                                    </div>
+
+                                    <div className="form-buttons">
+
+                                        <button
+                                            type="submit"
+                                            className="primary-button"
+                                        >
+                                            {editingBookId !==
+                                            null
+                                                ? "Update Book"
+                                                : "+ Add Book"}
+                                        </button>
+
+                                        {editingBookId !==
+                                            null && (
+                                            <button
+                                                type="button"
+                                                className="cancel-button"
+                                                onClick={
+                                                    clearBookForm
+                                                }
+                                            >
+                                                Cancel
+                                            </button>
+                                        )}
+
+                                    </div>
+
+                                </form>
+
+                            </div>
+                        )}
+
+                        {/* BOOK LIST */}
+
+                        <div className="content-card books-list-card">
+
+                            <div className="card-header">
+
+                                <div>
+                                    <h2>
+                                        Library Books
+                                    </h2>
+
+                                    <p>
+                                        {books.length} book(s)
+                                        currently
+                                        registered
+                                    </p>
+                                </div>
+
+                            </div>
+
+                            <div className="table-wrapper">
+
+                                <table>
+
+                                    <thead>
+
+                                        <tr>
+                                            <th>Title</th>
+                                            <th>Author</th>
+                                            <th>Genre</th>
+                                            <th>ISBN</th>
+                                            <th>Quantity</th>
+                                            <th>Status</th>
+
+                                            {currentUser.role !==
+                                                "Membership" && (
+                                                <th>Action</th>
+                                            )}
+                                        </tr>
+
+                                    </thead>
+
+                                    <tbody>
+
+                                        {books.map(book => (
+                                            <tr key={book.id}>
+
+                                                <td>
+                                                    {book.title}
+                                                </td>
+
+                                                <td>
+                                                    {book.author}
+                                                </td>
+
+                                                <td>
+                                                    {book.genre}
+                                                </td>
+
+                                                <td>
+                                                    {book.isbn}
+                                                </td>
+
+                                                <td>
+                                                    {book.quantity}
+                                                </td>
+
+                                                <td>
+                                                    {book.quantity < 2 ? (
+                                                        <span className="status low">
+                                                            Low Stock
+                                                        </span>
+                                                    ) : (
+                                                        <span className="status available">
+                                                            Available
+                                                        </span>
+                                                    )}
+                                                </td>
+
+                                                {currentUser.role !==
+                                                    "Membership" && (
+                                                    <td>
+
+                                                        <div className="action-buttons">
+
+                                                            <button
+                                                                className="edit-button"
+                                                                onClick={() =>
+                                                                    editBook(
+                                                                        book
+                                                                    )
+                                                                }
+                                                            >
+                                                                Update
+                                                            </button>
+
+                                                            <button
+                                                                className="delete-button"
+                                                                onClick={() =>
+                                                                    deleteBook(
+                                                                        book.id
+                                                                    )
+                                                                }
+                                                            >
+                                                                Delete
+                                                            </button>
+
+                                                        </div>
+
+                                                    </td>
+                                                )}
+
+                                            </tr>
+                                        ))}
+
+                                    </tbody>
+
+                                </table>
+
+                            </div>
+
+                        </div>
+
+                    </section>
                 )}
-                {activePage === "users" && (
-                    <UsersPage users={users} onSave={saveUser} onDelete={deleteUser} />
+
+                {/* =========================
+                    TRANSACTIONS
+                ========================= */}
+
+                {activePage === "Transactions" && (
+                    <section className="page">
+
+                        <div className="page-title">
+
+                            <div>
+                                <h2>
+                                    Transactions
+                                </h2>
+
+                                <p>
+                                    Add stock and record
+                                    borrowed books.
+                                </p>
+                            </div>
+
+                        </div>
+
+                        <div className="content-card add-book-card">
+
+                            <div className="card-header">
+
+                                <div>
+                                    <h2>
+                                        Record Transaction
+                                    </h2>
+
+                                    <p>
+                                        Add stock or deduct
+                                        stock when a book
+                                        is borrowed.
+                                    </p>
+                                </div>
+
+                            </div>
+
+                            <form
+                                className="book-form"
+                                onSubmit={
+                                    recordTransaction
+                                }
+                            >
+
+                                <div className="form-group">
+
+                                    <label>
+                                        Select Book
+                                    </label>
+
+                                    <select
+                                        value={
+                                            selectedBookId
+                                        }
+                                        onChange={e =>
+                                            setSelectedBookId(
+                                                e.target.value
+                                            )
+                                        }
+                                    >
+
+                                        <option value="">
+                                            -- Select a book --
+                                        </option>
+
+                                        {books.map(book => (
+                                            <option
+                                                key={book.id}
+                                                value={book.id}
+                                            >
+                                                {book.title} —
+                                                Stock:{" "}
+                                                {
+                                                    book.quantity
+                                                }
+                                            </option>
+                                        ))}
+
+                                    </select>
+
+                                </div>
+
+                                <div className="form-group">
+
+                                    <label>
+                                        Transaction Type
+                                    </label>
+
+                                    <select
+                                        value={
+                                            transactionType
+                                        }
+                                        onChange={e =>
+                                            setTransactionType(
+                                                e.target.value
+                                            )
+                                        }
+                                    >
+
+                                        <option value="add">
+                                            Add Stock
+                                        </option>
+
+                                        <option value="borrow">
+                                            Borrow / Deduct
+                                            Stock
+                                        </option>
+
+                                    </select>
+
+                                </div>
+
+                                <div className="form-group">
+
+                                    <label>
+                                        Quantity
+                                    </label>
+
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={
+                                            transactionQuantity
+                                        }
+                                        onChange={e =>
+                                            setTransactionQuantity(
+                                                e.target
+                                                    .value
+                                            )
+                                        }
+                                        placeholder="Enter quantity"
+                                    />
+
+                                </div>
+
+                                <div className="form-buttons">
+
+                                    <button
+                                        type="submit"
+                                        className="primary-button"
+                                    >
+                                        Record Transaction
+                                    </button>
+
+                                </div>
+
+                            </form>
+
+                        </div>
+
+                        <div className="content-card">
+
+                            <div className="card-header">
+
+                                <div>
+                                    <h2>
+                                        Transaction History
+                                    </h2>
+
+                                    <p>
+                                        Record of stock
+                                        changes and
+                                        borrowed books.
+                                    </p>
+                                </div>
+
+                            </div>
+
+                            <div className="table-wrapper">
+
+                                <table>
+
+                                    <thead>
+                                        <tr>
+                                            <th>Date</th>
+                                            <th>Book</th>
+                                            <th>
+                                                Transaction
+                                            </th>
+                                            <th>Quantity</th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody>
+
+                                        {transactions.length ===
+                                        0 ? (
+                                            <tr>
+                                                <td
+                                                    colSpan="4"
+                                                    style={{
+                                                        textAlign:
+                                                            "center",
+                                                        padding:
+                                                            "30px"
+                                                    }}
+                                                >
+                                                    No transactions
+                                                    recorded yet.
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            transactions.map(
+                                                transaction => (
+                                                    <tr
+                                                        key={
+                                                            transaction.id
+                                                        }
+                                                    >
+
+                                                        <td>
+                                                            {
+                                                                transaction.date
+                                                            }
+                                                        </td>
+
+                                                        <td>
+                                                            {
+                                                                transaction.bookTitle
+                                                            }
+                                                        </td>
+
+                                                        <td>
+
+                                                            {transaction.type ===
+                                                            "Borrowed" ? (
+                                                                <span className="status low">
+                                                                    Borrowed
+                                                                </span>
+                                                            ) : (
+                                                                <span className="status available">
+                                                                    Stock
+                                                                    Added
+                                                                </span>
+                                                            )}
+
+                                                        </td>
+
+                                                        <td>
+                                                            {
+                                                                transaction.quantity
+                                                            }
+                                                        </td>
+
+                                                    </tr>
+                                                )
+                                            )
+                                        )}
+
+                                    </tbody>
+
+                                </table>
+
+                            </div>
+
+                        </div>
+
+                    </section>
                 )}
+
+                {/* =========================
+                    USER MANAGEMENT
+                ========================= */}
+
+                {activePage === "Users" &&
+                    currentUser.role === "Admin" && (
+                        <section className="page">
+
+                            <div className="page-title">
+
+                                <div>
+                                    <h2>
+                                        User Management
+                                    </h2>
+
+                                    <p>
+                                        Manage library
+                                        members, librarians
+                                        and administrators.
+                                    </p>
+                                </div>
+
+                            </div>
+
+                            <div className="content-card add-book-card">
+
+                                <div className="card-header">
+
+                                    <div>
+                                        <h2>
+                                            {editingUserId !==
+                                            null
+                                                ? "Update User"
+                                                : "Add New User"}
+                                        </h2>
+
+                                        <p>
+                                            Create accounts
+                                            and assign their
+                                            system role.
+                                        </p>
+                                    </div>
+
+                                </div>
+
+                                <form
+                                    className="book-form"
+                                    onSubmit={
+                                        handleUserSubmit
+                                    }
+                                >
+
+                                    <div className="form-group">
+
+                                        <label>
+                                            Full Name
+                                        </label>
+
+                                        <input
+                                            type="text"
+                                            value={userName}
+                                            onChange={e =>
+                                                setUserName(
+                                                    e.target
+                                                        .value
+                                                )
+                                            }
+                                            placeholder="Enter full name"
+                                        />
+
+                                    </div>
+
+                                    <div className="form-group">
+
+                                        <label>
+                                            Membership ID
+                                        </label>
+
+                                        <input
+                                            type="text"
+                                            value={
+                                                membershipId
+                                            }
+                                            onChange={e =>
+                                                setMembershipId(
+                                                    e.target
+                                                        .value
+                                                )
+                                            }
+                                            placeholder="e.g. MEM002"
+                                        />
+
+                                    </div>
+
+                                    <div className="form-group">
+
+                                        <label>
+                                            Role
+                                        </label>
+
+                                        <select
+                                            value={
+                                                userRole
+                                            }
+                                            onChange={e =>
+                                                setUserRole(
+                                                    e.target
+                                                        .value
+                                                )
+                                            }
+                                        >
+
+                                            <option value="Membership">
+                                                Membership
+                                            </option>
+
+                                            <option value="Librarian">
+                                                Librarian
+                                            </option>
+
+                                            <option value="Admin">
+                                                Admin
+                                            </option>
+
+                                        </select>
+
+                                    </div>
+
+                                    <div className="form-group">
+
+                                        <label>
+                                            Password
+                                        </label>
+
+                                        <input
+                                            type="password"
+                                            value={
+                                                userPassword
+                                            }
+                                            onChange={e =>
+                                                setUserPassword(
+                                                    e.target
+                                                        .value
+                                                )
+                                            }
+                                            placeholder="Enter password"
+                                        />
+
+                                    </div>
+
+                                    <div className="form-buttons">
+
+                                        <button
+                                            type="submit"
+                                            className="primary-button"
+                                        >
+                                            {editingUserId !==
+                                            null
+                                                ? "Update User"
+                                                : "+ Add User"}
+                                        </button>
+
+                                        {editingUserId !==
+                                            null && (
+                                            <button
+                                                type="button"
+                                                className="cancel-button"
+                                                onClick={
+                                                    clearUserForm
+                                                }
+                                            >
+                                                Cancel
+                                            </button>
+                                        )}
+
+                                    </div>
+
+                                </form>
+
+                            </div>
+
+                            <div className="content-card">
+
+                                <div className="card-header">
+
+                                    <div>
+                                        <h2>
+                                            System Users
+                                        </h2>
+
+                                        <p>
+                                            Registered
+                                            accounts and
+                                            their access
+                                            levels.
+                                        </p>
+                                    </div>
+
+                                </div>
+
+                                <div className="table-wrapper">
+
+                                    <table>
+
+                                        <thead>
+
+                                            <tr>
+                                                <th>Name</th>
+                                                <th>
+                                                    Membership
+                                                    ID
+                                                </th>
+                                                <th>Role</th>
+                                                <th>
+                                                    Action
+                                                </th>
+                                            </tr>
+
+                                        </thead>
+
+                                        <tbody>
+
+                                            {users.map(user => (
+                                                <tr
+                                                    key={
+                                                        user.id
+                                                    }
+                                                >
+
+                                                    <td>
+                                                        {
+                                                            user.name
+                                                        }
+                                                    </td>
+
+                                                    <td>
+                                                        {
+                                                            user.membershipId
+                                                        }
+                                                    </td>
+
+                                                    <td>
+
+                                                        <span
+                                                            className={`role-badge ${user.role.toLowerCase()}`}
+                                                        >
+                                                            {
+                                                                user.role
+                                                            }
+                                                        </span>
+
+                                                    </td>
+
+                                                    <td>
+
+                                                        <div className="action-buttons">
+
+                                                            <button
+                                                                className="edit-button"
+                                                                onClick={() =>
+                                                                    editUser(
+                                                                        user
+                                                                    )
+                                                                }
+                                                            >
+                                                                Update
+                                                            </button>
+
+                                                            <button
+                                                                className="delete-button"
+                                                                onClick={() =>
+                                                                    deleteUser(
+                                                                        user.id
+                                                                    )
+                                                                }
+                                                            >
+                                                                Delete
+                                                            </button>
+
+                                                        </div>
+
+                                                    </td>
+
+                                                </tr>
+                                            ))}
+
+                                        </tbody>
+
+                                    </table>
+
+                                </div>
+
+                            </div>
+
+                        </section>
+                    )}
+
             </main>
-
-            <Footer />
-        </>
+            <footer className="site-footer">
+               © 2026 KINGS Library Management System. All Rights Reserved.
+            </footer>
+        </div>
     );
 }
 
